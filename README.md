@@ -31,4 +31,4 @@ metrics include:
     python mstats -c mstats.json >> mstats.log
 
 ## screen shot
-[screenshot.png](https://github.com/mingbowan/mstats/blob/master/screenshot.png)
+![screenshot.png](https://github.com/mingbowan/mstats/blob/master/screenshot.png)
