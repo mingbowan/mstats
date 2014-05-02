@@ -1,15 +1,14 @@
 {
-	"interval":"10",
+	"interval":"10", ## in seconds
 	"mstats_graphite":{
-		"graphite_prefix":"dev.app.nginx-01",
-		"graphite_host":"localhost",
+		"graphite_prefix":"dev.app.nginx-01",# prefix 
+		"graphite_host":"localhost", # ip or hostname of graphite server
 		"graphite_port": 2003
 	},
 	"mstats_os":{
 		"processmonitorConfig":{
-            "nginx-worker": "nginx: worker",
+            "nginx-worker": "nginx: worker", ## format "name show in Graphite" : " regex pattern like ps -ef |grep "
             "nginx-master": "nginx: master",
-            "guake": "guake"
 		}
 	}
 }
