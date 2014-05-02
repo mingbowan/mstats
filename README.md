@@ -27,4 +27,8 @@ metrics include:
  see mstats.json.example, remember to remove comments
 ## installation
  copy/download the mstats file to somewhere on your target machine, modify the mstats.json file and run the script:
+
     python mstats -c mstats.json >> mstats.log
+
+## screen shot
+[[screenshot.png]]
