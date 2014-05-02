@@ -1,0 +1,15 @@
+{
+	"interval":"10",
+	"mstats_graphite":{
+		"graphite_prefix":"dev.app.nginx-01",
+		"graphite_host":"localhost",
+		"graphite_port": 2003
+	},
+	"mstats_os":{
+		"processmonitorConfig":{
+            "nginx-worker": "nginx: worker",
+            "nginx-master": "nginx: master",
+            "guake": "guake"
+		}
+	}
+}

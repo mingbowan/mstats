@@ -1,0 +1,255 @@
+#!/usr/bin/env python
+'''
+@author: mingbo.wan@gmail.com
+'''
+
+from ctypes import CDLL
+import glob
+import json
+import logging
+from optparse import OptionParser
+import os
+import re
+import select
+from socket import socket
+import sys
+import time
+from threading import Timer
+
+
+class mstats_os():
+    cpuMetric = ["user", "nice", "system", "idle", "iowait", "irq", "softIrq", "steal", "guest", "guest_nice"]
+    cpuTickAll = {}
+    cpuTick = {}
+    cpuTickDelta = {}
+    cpuMetricName = {"ctxt":"context_switch",
+    "processes":"process_forked",
+    "procs_running":"process_running",
+    "procs_blocked":"procs_blocked"}
+    pagingName = ["page", "swap"]
+
+    lastTime = {}
+    processMonHist = {}
+    diskMetric = ["reads_completed", "reads_merged", "sectors_read", "read_time_in_ms", "writes_completed", "writes_merged", "sectors_written", "write_time_in_ms", "current_IOs", "IO_time_in_ms", "IO_time_in_ms_weighted"]
+    prefix = "OS."
+
+    processMonName = []
+    processMonPattern = []
+    processMonFields = {9 : "minor_fault", 11: "major_fault", 13:"usertime", 14:"systemtime", 19: "num_threads", 22: "virtual_mem_size_byte", 23: "rss_mem_size_byte"}
+    processMonData = {}
+
+    result = []
+
+    def __init__(self, config):
+        if "processmonitorConfig" in config.keys():
+            processmonitor = config["processmonitorConfig"]
+            for i in processmonitor.keys():
+                try:
+                    self.processMonPattern.append(re.compile(processmonitor[i]))
+                    self.processMonName.append(i)
+                except Exception as e:
+                    logging.error("process monitor configuration problem: " + str(e), exc_info=True)
+
+        with open("/proc/stat") as stats:
+            for line in stats:
+                if line.startswith("cpu"):
+                    pre = line.split()
+                    name = pre[0]
+                    data = map(lambda x: int(x), pre[1:])
+                    self.cpuTickAll[name] = sum(data)
+                    self.cpuTick[name] = data
+        self.pageSize = CDLL("libc.so.6").getpagesize()
+
+    def addToResult(self, name, value):
+        self.result.append((self.prefix + str(name), float(value), int(time.time())))
+
+    def run(self):
+        self.result = []
+        #### collect process info
+        if len(self.processMonName) > 0 and len(self.processMonPattern) > 0:
+            processMonHist = {}
+            allLiveKeys = []
+            for file in glob.glob("/proc/*/cmdline"):
+                with open(file) as f:
+                    cmdline = f.readline().strip().replace("\0", " ")
+                    for i in range(0, len(self.processMonPattern)):
+                        if self.processMonPattern[i].search(cmdline):
+                            pid = file.replace("/proc/", "").replace("/cmdline", "")
+                            statfile = file.replace("cmdline", "stat")
+                            with open(statfile) as stat:
+                                stats = stat.readline().split()
+                                for f in self.processMonFields.keys():
+                                    if f == 23:
+                                        self.addToResult("process." + self.processMonName[i] + "_" + pid + "." + self.processMonFields[f], int(stats[f]) * self.pageSize)
+                                    elif f == 13 or f == 14 :
+                                        key = cmdline + "_" + str(f) + "_" + pid
+                                        if self.processMonHist.has_key(key) and "cpu" in self.cpuTickDelta:
+                                            delta = int(stats[f]) - int(self.processMonHist[key])
+                                            value = 100 * delta / self.cpuTickDelta["cpu"]
+                                            self.addToResult("process." + self.processMonName[i] + "_" + pid + "." + self.processMonFields[f], value)
+                                        processMonHist[key] = stats[f]
+                                        allLiveKeys.append(key)
+                                    else:
+                                        self.addToResult("process." + self.processMonName[i] + "_" + pid + "." + self.processMonFields[f], stats[f])
+                            iostatfile = file.replace("cmdline", "io")
+                            if os.path.exists(iostatfile):
+                                with open(iostatfile) as stat:
+                                    for iostat in stat.readlines():
+                                        key = iostat.split(":")[0]
+                                        val = int(iostat.split(":")[1])
+                                        self.addToResult("process."+ self.processMonName[i] + "_" + pid + "." + key, val)
+                            break
+            self.processMonHist = dict((k, v) for k, v in processMonHist.iteritems() if k in allLiveKeys)
+        with open("/proc/stat") as stats:
+            for line in stats:
+                # ## CPU usage, if we only want overall, change "cpu" to "cpu " (with one space at end)
+                if line.startswith("cpu"):
+                    pre = line.split()
+                    name = pre[0]
+                    data = map(lambda x: int(x), pre[1:])
+                    delta = sum(data) - self.cpuTickAll[name]
+                    if name in self.cpuTickDelta.keys():
+                        for i in range(0, min(len(data), len(self.cpuMetric))):
+                            self.addToResult("cpu." + name + "." + self.cpuMetric[i], "{0:.2f}".format(100.0 * (data[i] - self.cpuTick[name][i]) / delta))
+                    self.cpuTickDelta[name] = delta
+                    self.cpuTickAll[name] = sum(data)
+                    self.cpuTick[name] = data
+                    continue
+                # content switch, process forks, running etc.
+                for name in self.cpuMetricName.keys():
+                    if line.startswith(name):
+                        self.addToResult("cpu." + self.cpuMetricName[name], line.strip().split()[1])
+                # # page in/out, swap in/out
+                for name in self.pagingName:
+                    if line.startswith(name):
+                        data = line.strip().split()
+                        self.addToResult("swap." + name + "In_pages ", data[1])
+                        self.addToResult("swap." + name + "Out_pages ", data[2])
+
+        # ## load average
+        with open("/proc/loadavg") as stats:
+            for line in [ x.split() for x in stats.readlines()]:
+                 self.addToResult("loadavg.1m", line[0])
+                 self.addToResult("loadavg.5m", line[1])
+                 self.addToResult("loadavg.10m", line[2])
+
+        # # meminfo
+        with open("/proc/meminfo") as stats:
+            type = "memory."
+            for line in [ (x.strip().split()) for x in stats.readlines()]:
+                if len(line) < 3:
+                    unit = ""
+                else:
+                    unit = "_" + line[2]
+                name = line[0]
+                name = name.replace(":", "").replace("(", "_").replace(")", "")
+                self.addToResult("memory." + name + unit, line[1])
+
+        # # disk performance
+        with open("/proc/diskstats") as stats:
+            for line in [ x.strip().split() for x in stats.readlines()]:
+                if line[2].startswith("ram") or line[2].startswith("loop"):
+                    continue
+                data = line[3:]
+                for i in range(0, min(len(data), len(self.diskMetric))):
+                    self.addToResult("diskstats." + line[2] + "." + self.diskMetric[i], data[i])
+        # network interface metrics
+        with open("/proc/net/dev") as stats:
+            lines = stats.readlines()
+            metric = lines[1].strip().split("|")[2:3]
+            name = ["recieve." + x for x in metric[0].split()]
+            name += ["trasnmit." + x for x in metric[0].split()]
+            for line in lines[2:]:
+                pre = line.strip().split(":")
+                nic = pre[0]
+                data = pre[1].split()
+                for kv in zip(name, data):
+                    self.addToResult("network.interface." + nic + "." + kv[0], kv[1])
+        # tcp/udp/ip usage
+        with open("/proc/net/snmp") as net:
+            line = net.readline()
+            while line != "":
+                names = line.strip().split()
+                values = net.readline().strip().split(" ")
+                if names[0] in ["Ip:", "Tcp:", "Udp:"]:
+                    kv = zip(names, values)
+                    prefix = names[0].replace(":", "")
+                    for n in kv[1:]:
+                        self.addToResult("network.protocol." + prefix + "." + n[0], n[1])
+                line = net.readline()
+        # ## file system usage
+        with open("/proc/self/mounts") as mounts:
+            for line in mounts:
+                list = line.split()
+                name = list[1]
+                if list[0].startswith("/"):
+                    fstats = os.statvfs(name)
+                    name = name.replace("/", "%2F")
+                    self.addToResult("filesystem." + name + ".total_kb" , str(fstats.f_bsize / 1024 * fstats.f_blocks))
+                    self.addToResult("filesystem." + name + ".used_kb" , str(fstats.f_bsize / 1024 * fstats.f_blocks - fstats.f_bsize / 1024 * fstats.f_bfree))
+                    self.addToResult("filesystem." + name + ".free_kb" , str(fstats.f_bsize / 1024 * fstats.f_bfree))
+                    self.addToResult("filesystem." + name + ".total_inode" , str(fstats.f_bsize / 1024 * fstats.f_files))
+                    self.addToResult("filesystem." + name + ".used_inode" , str(fstats.f_bsize / 1024 * fstats.f_files - fstats.f_bsize / 1024 * fstats.f_ffree))
+                    self.addToResult("filesystem." + name + ".free_inode" , str(fstats.f_bsize / 1024 * fstats.f_ffree))
+
+        return self.result
+
+class mstats_graphite():
+    def __init__(self, config):
+        self.prefix = config["graphite_prefix"]
+        self.host = config["graphite_host"]
+        self.port = int(config["graphite_port"])
+        self.s = socket()
+        try:
+            self.s.connect((self.host, self.port))
+            self.good = True
+        except:
+            self.good = False
+
+    def run(self, data):
+        if not self.good:
+            self.s.close()
+            self.s = socket()
+            try:
+                self.s.connect((self.host, self.port))
+                self.good = True
+            except:
+                self.good = False
+                logging.info("problem talking to " + self.host + ":" + str(self.port), exc_info=True)
+        if self.good:
+            (broken, ready, ignore) = select.select([self.s.fileno()], [self.s.fileno()], [])
+            if len(broken) > 0 and self.s.recv(1024) == "" :
+                self.good = False
+                logging.info("connection closed")
+            elif len(ready) == 1:
+                try:
+                    self.s.sendall("\n".join([self.prefix + "." + d[0] + " " + str(d[1]) + " " + str(d[2])  for d in data]) + "\n")
+                except:
+                    self.good = False
+                    logging.info("problem talking to " + self.host + ":" + str(self.port), exc_info=True)
+
+def run():
+    Timer(interval, run).start()
+    graphite.run( mstat_os.run())
+
+if __name__ == '__main__':
+    optp = OptionParser()
+    optp.add_option("-c", "--config", dest="file", help="configuration file (no default value)")
+    optp.add_option("-l", "--loglevel", dest="loglevel", default="WARN", help="set log level, can be debug, info, warn, error or critical (default warn)")
+    opts, args = optp.parse_args()
+    configfile = opts.file
+    if configfile is None or opts.loglevel.lower() not in ["debug", "info", "warn", "error", "critical"]:
+        optp.print_help()
+        sys.exit(2)
+    logging.basicConfig(format='%(asctime)s (%(filename)s %(lineno)d) %(levelname)s: %(message)s', level=getattr(logging, opts.loglevel.upper(), None))
+    try:
+        config = json.load(open(configfile))
+    except Exception as e:
+        logging.fatal("cannot read/load configuration file: " + str(e), exc_info=True)
+        sys.exit(2)
+
+    mstat_os = mstats_os(config["mstats_os"])
+    graphite = mstats_graphite(config["mstats_graphite"])
+    interval = float(config["interval"])
+    run()
+
