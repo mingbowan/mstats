@@ -12,17 +12,17 @@ metrics include:
 ## requirements
  Python 2.6+ (not sure if 3.0 works, I haven't test it), which should be included in most Linux distro by default
 ## usage
-``` python mstats -h
-Usage: mstats [options]
+    python mstats -h
+    Usage: mstats [options]
 
-Options:
-  -h, --help            show this help message and exit
-  -c FILE, --config=FILE
-                        configuration file (no default value)
-  -l LOGLEVEL, --loglevel=LOGLEVEL
-                        set log level, can be debug, info, warn, error or
-                        critical (default warn)
-```
+    Options:
+      -h, --help            show this help message and exit
+      -c FILE, --config=FILE
+                            configuration file (no default value)
+      -l LOGLEVEL, --loglevel=LOGLEVEL
+                            set log level, can be debug, info, warn, error or
+                            critical (default warn)
+
 ## configuration
  see mstats.json.example, remember to remove comments
 ## installation
