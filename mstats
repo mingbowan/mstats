@@ -7,7 +7,7 @@ from ctypes import CDLL
 import glob
 import json
 import logging
-from optparse import OptionParser
+import argparse
 import os
 import re
 import select
@@ -15,6 +15,22 @@ from socket import socket
 import sys
 import time
 from threading import Timer
+
+def merge(a, b, path=None):
+    "merges b into a"
+    if path is None: path = []
+    for key in b:
+        if key in a:
+            if isinstance(a[key], dict) and isinstance(b[key], dict):
+                merge(a[key], b[key], path + [str(key)])
+            elif a[key] == b[key]:
+                pass # same leaf value
+            else:
+                raise Exception('Conflict at %s' % '.'.join(path + [str(key)]))
+        else:
+            a[key] = b[key]
+    return a
+
 
 
 class mstats_os():
@@ -233,21 +249,21 @@ def run():
     graphite.run( mstat_os.run())
 
 if __name__ == '__main__':
-    optp = OptionParser()
-    optp.add_option("-c", "--config", dest="file", help="configuration file (no default value)")
-    optp.add_option("-l", "--loglevel", dest="loglevel", default="WARN", help="set log level, can be debug, info, warn, error or critical (default warn)")
-    opts, args = optp.parse_args()
-    configfile = opts.file
-    if configfile is None or opts.loglevel.lower() not in ["debug", "info", "warn", "error", "critical"]:
-        optp.print_help()
-        sys.exit(2)
-    logging.basicConfig(format='%(asctime)s (%(filename)s %(lineno)d) %(levelname)s: %(message)s', level=getattr(logging, opts.loglevel.upper(), None))
-    try:
-        config = json.load(open(configfile))
-    except Exception as e:
-        logging.fatal("cannot read/load configuration file: " + str(e), exc_info=True)
-        sys.exit(2)
+    parse=argparse.ArgumentParser(description="mstats command line options")
+    parse.add_argument('-c', '--config',help="configuration file or files (specify multiple times)", action='append', required=True, nargs="*")
+    parse.add_argument('-l', '--loglevel',help="set log level, default warn", default="warn", choices=["debug", "info", "warn", "error", "critical"])
+    args=parse.parse_args()
+    config={}
+    for f in args.config:
+        for fn in f:
+            try:
+                merge(config,json.load(open(fn)))
+            except Exception as e:
+                logging.fatal("cannot read/load configuration file: " + fn +"\n"+ str(e), exc_info=True)
+                sys.exit(2)
+    logging.basicConfig(format='%(asctime)s (%(filename)s %(lineno)d) %(levelname)s: %(message)s', level=getattr(logging, args.loglevel.upper(), None))
 
+    print config
     mstat_os = mstats_os(config["mstats_os"])
     graphite = mstats_graphite(config["mstats_graphite"])
     interval = float(config["interval"])
